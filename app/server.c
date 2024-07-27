@@ -1,6 +1,7 @@
 #include <errno.h>
 #include <netinet/in.h>
 #include <netinet/ip.h>
+#include <pthread.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -19,11 +20,14 @@ typedef int16_t i16;
 typedef uint8_t u8;
 typedef int8_t i8;
 
+void *handle_conn(void *client);
+
+const char *response_ok	       = "HTTP/1.1 200 OK\r\n";
+const char *response_not_found = "HTTP/1.1 404 Not Found\r\n\r\n";
+
 int main() {
 	setbuf(stdout, NULL);
 	setbuf(stderr, NULL);
-
-	printf("Logs from your program will appear here!\n");
 
 	int server_fd;
 	uint client_addr_len;
@@ -52,31 +56,39 @@ int main() {
 		return 1;
 	}
 
-	int connection_backlog = 5;
+	int connection_backlog = 10;
 	if (listen(server_fd, connection_backlog) != 0) {
 		printf("Listen failed: %s \n", strerror(errno));
 		return 1;
 	}
 
 	client_addr_len = sizeof(client_addr);
-	printf("Waiting for a client to connect...\n");
 
-	int fd = accept(server_fd, (struct sockaddr *)&client_addr, &client_addr_len);
-	printf("Client connected %d\n", fd);
+	while (1) {
+		int fd = accept(server_fd, (struct sockaddr *)&client_addr, &client_addr_len);
 
-	const char *response_ok	       = "HTTP/1.1 200 OK\r\n";
-	const char *response_not_found = "HTTP/1.1 404 Not Found\r\n\r\n";
+		int *pthread_fd = &fd;
+		pthread_t proc;
+		pthread_create(&proc, NULL, handle_conn, pthread_fd);
+	}
+
+	close(server_fd);
+
+	return 0;
+}
+
+void *handle_conn(void *sock) {
+	int client = *((int *)sock);
 
 	char buffer[2048];
-	ssize_t bytes_received = recv(fd, buffer, 2048, 0);
+	ssize_t bytes_received = recv(client, buffer, 2048, 0);
 
 	if (bytes_received <= 0) {
 		printf("Not received data: %s\n", strerror(errno));
-		close(fd);
-		close(server_fd);
-
-		return 1;
+		return NULL;
 	}
+
+	printf("Client connected %d\n", client);
 
 	char *url_path = strtok(buffer, " ");
 	url_path       = strtok(NULL, " "); // avança no pointer
@@ -86,20 +98,17 @@ int main() {
 		char resp[1024];
 		sprintf(resp, "%sContent-Type: text/plain\r\nContent-Length: 4\r\n\r\n%s", response_ok, "echo");
 
-		send(fd, resp, strlen(resp), 0);
+		send(client, resp, strlen(resp), 0);
 	} else if (only_echo_or_more == 0) {
 		char *path = url_path + 6; // +6 porque tem que excluir o "echo", então a gente anda com o pointer
 		char resp[1024];
 		sprintf(resp, "%sContent-Type: text/plain\r\nContent-Length: %ld\r\n\r\n%s", response_ok, strlen(path),
 			path);
 
-		send(fd, resp, strlen(resp), 0);
+		send(client, resp, strlen(resp), 0);
 	} else {
-		send(fd, response_not_found, strlen(response_not_found), 0);
+		send(client, response_not_found, strlen(response_not_found), 0);
 	}
 
-	close(fd);
-	close(server_fd);
-
-	return 0;
+	return NULL;
 }
